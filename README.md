@@ -8,7 +8,7 @@ run:
 mkdir data  
 python collect_data.py  
 cat data/* > data/bank_final.txt  
-rm data/*tmp*  
+rm data/\*tmp\*  
 
 Each line is a sentense conatining 'bank'.  
 financial bank: line ends with '+'.  
