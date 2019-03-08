@@ -13,7 +13,7 @@ def process_semcor():
 	word = 'bank'
 	sen1 = 'depository_financial_institution.n.01'
 	sen2 = 'bank.n.01'
-	file_name = 'bank_semcor_labelled.txt'
+	file_name = 'bank_semcor_labelled_tmp.txt'
 	for f in semcor.fileids():
 		sents = semcor.sents(f)
 		tsents = semcor.tagged_sents(f,'sem')
@@ -53,7 +53,7 @@ def process_gutenberg():
 	word = 'bank'
 	sen1 = 'depository_financial_institution.n.01'
 	sen2 = 'bank.n.01'
-	file_name = 'bank_gutenberg.txt'
+	file_name = 'bank_gutenberg_tmp.txt'
 	for f in gutenberg.fileids():
 		sents = gutenberg.sents(f)
 		for i in range(len(sents)):
@@ -70,7 +70,7 @@ def process_webtext():
 	word = 'bank'
 	sen1 = 'depository_financial_institution.n.01'
 	sen2 = 'bank.n.01'
-	file_name = 'bank_webtext.txt'
+	file_name = 'bank_webtext_tmp.txt'
 	for f in webtext.fileids():
 		sents = webtext.sents(f)
 		for i in range(len(sents)):
@@ -87,7 +87,7 @@ def process_reuters():
 	word = 'bank'
 	sen1 = 'depository_financial_institution.n.01'
 	sen2 = 'bank.n.01'
-	file_name = 'bank_reuters.txt'
+	file_name = 'bank_reuters_tmp.txt'
 	for f in reuters.fileids():
 		sents = reuters.sents(f)
 		for i in range(len(sents)):
@@ -97,8 +97,9 @@ def process_reuters():
 				count = count+1
 				print count
 
-# process_semcor()
-# process_brown()
-# process_gutenberg()
-# process_webtext()
+
+process_semcor()
+process_brown()
+process_gutenberg()
+process_webtext()
 process_reuters()
