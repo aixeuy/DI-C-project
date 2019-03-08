@@ -36,7 +36,7 @@ def process_brown():
 	word = 'bank'
 	sen1 = 'depository_financial_institution.n.01'
 	sen2 = 'bank.n.01'
-	file_name = 'data/bank_brwon.txt'
+	file_name = 'data/bank_brwon_tmp.txt'
 	for f in brown.fileids():
 		sents = brown.sents(f)
 		for i in range(len(sents)):
