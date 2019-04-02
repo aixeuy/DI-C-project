@@ -27,6 +27,11 @@ import org.apache.spark.HashPartitioner
 import org.apache.spark.rdd.RDD
 
 import scala.collection.mutable
+import scala.math._
+import scala.util.control.Breaks._
+
+import org.apache.log4j.Logger
+import org.apache.log4j.Level
 
 
 class YarowskyConf(args: Seq[String]) extends ScallopConf(args) {
@@ -88,32 +93,77 @@ object Yarowsky extends Tokenizer {
     return res
   }
 
-  // def train(f_positives:RDD[List(Int)], f_negatives:RDD[List(Int)], n_iter:Int):scala.collection.Map[Int, Double]={
-  //   var iter = 0
-  //   for(iter <- 0 to n_iter){
+  def classify(features: List[Int], w: scala.collection.Map[Int, Double]):Double = {
+    var score = 0d
+    features.foreach(f => if (w.contains(f)) score += w(f))
+    return score
+  }
 
-  //   }
-  // }
+  def accuracy(f_classified:RDD[(List[Int],Int)], w:scala.collection.Map[Int, Double]):Double={
+    val corrects = f_classified.map(t=>("",if(classify(t._1,w)*t._2>0) 1D else 0D))
+    .reduceByKey(_+_)
+    .take(1)
+    return corrects(0)._2/f_classified.count()
+  }
+
+  def train(f_classified:RDD[(List[Int],Int)], n_iter:Int, alpha: Double, delta: Double): scala.collection.Map[Int, Double]={
+    var iter = 0
+
+    var w = scala.collection.Map[Int, Double]()
+    breakable{
+      for(iter <- 0 to n_iter){
+        println("## trainning iter "+iter)
+        val d_w = f_classified.flatMap(t => {
+          val label = if(t._2>0) 1 else 0
+          val score = classify(t._1, w)
+          val prob = 1.0 / (1 + exp(-score))
+          t._1.map(f=>(f, (label - prob) * alpha))
+          })
+        .reduceByKey(_+_)
+
+        w = d_w.map(t=>(t._1,t._2 + w.getOrElse(t._1,0.0)))
+        .collectAsMap()
+
+        val s_d_w = d_w.map(t=>("",abs(t._2)))
+        .reduceByKey(_+_)
+        .take(1)
+
+        println("##  model weights changed by: " + s_d_w(0)._2)
+        if(s_d_w(0)._2 < delta){
+          break
+        }
+      }
+    }
+    return w//scala.collection.Map[Int, Double]()
+  }
 
 /**
   run Yarowsky's Algorithm with fixed hyper parameters
 */
   def run(sents:RDD[(String,Int)], sc:SparkContext, model_path:String, result_path: String,
     N:Int, m:Int, tf_idf:Boolean, n_iter:Int): Double={
-    // var n_unclassified = 0
-    // var n_unclassified_new = unclassified.count()
+    var n_unclassified = 0L
+    var n_unclassified_new = sents.filter(t => t._2 == 0).count()
+    var iter = 0;
 
-    // while(n_unclassified_new>0 && n_unclassified_new!=n_unclassified){
+    while(n_unclassified_new>0 && n_unclassified_new != n_unclassified){
+      println("# yarowsky iter: " + iter)
+      println("# extracting features")
       val f_map = extractNGram(sents,N,m,tf_idf)
       val f_sents = toNGram(sents, f_map, N)
 
+      println("# trainning model")
+      val f_classified = f_sents.filter(t=>t._2!=0)
+      val w = train(f_classified, n_iter, 0.002, 0.05)
+      val train_acc =  accuracy(f_classified, w)
+      println("# trainning accuracy is: " + train_acc)
       /////test
-      println("################### converted N-Gram ##################")
-      f_sents.take(5).foreach(println)
+      // println("################### converted N-Gram ##################")
+      // f_sents.take(5).foreach(println)
 
-    //   n_unclassified = n_unclassified_new
-
-    // }
+      n_unclassified = n_unclassified_new
+      iter = iter + 1
+    }
 
     return 0.0
   }
@@ -125,6 +175,9 @@ object Yarowsky extends Tokenizer {
     val conf = new SparkConf().setAppName("Bigram Count")
     // conf.set("spark.sql.shuffle.partitions", args.reducers()+"")
     // conf.set("spark.default.parallelism", args.reducers()+"")
+    Logger.getLogger("org").setLevel(Level.OFF)
+    Logger.getLogger("akka").setLevel(Level.OFF)
+
     val sc = new SparkContext(conf)
     
     val outputDir = new Path(args.output())
