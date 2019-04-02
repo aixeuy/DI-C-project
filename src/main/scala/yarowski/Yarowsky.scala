@@ -47,19 +47,23 @@ object Yarowsky extends Tokenizer {
   /**
   extract N-Gram as a map from String to int, for example: "A B C" -> 1 (3-gram)
   */
-  def extractNGram(positives:RDD[String], negatives:RDD[String], N:Int, m:Int, ranking:String):Map[String, Int]={
-    val o = positives.union(negatives)
+  def extractNGram(positives:RDD[String], negatives:RDD[String], N:Int, m:Int, ranking:String):scala.collection.Map[String, Int]={
+    ///// no tf-idf
+    val res = positives.union(negatives)
     .flatMap(line => {
         val tokens = tokenize(line)
         if (tokens.length >= N) tokens.sliding(N).map(p => p.mkString(" ")).toList else List()
       })
+    .distinct
+    .zipWithIndex
+    .map(t=>(t._1,t._2.toInt))
+    .collectAsMap()
 
-    println("################### N-Gram ##################")
     /////test
+    println("################### N-Gram ##################")
+    res.take(5).foreach(println)
 
-    o.take(5).foreach(println)
-
-    return Map[String, Int]()
+    return res
   }
 
 /**
