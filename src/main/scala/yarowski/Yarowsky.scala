@@ -47,7 +47,7 @@ object Yarowsky extends Tokenizer {
   /**
   extract N-Gram as a map from String to int, for example: "A B C" -> 1 (3-gram)
   */
-  def extractNGram(positives:RDD[String], negatives:RDD[String], N:Int, m:Int, ranking:String):scala.collection.Map[String, Int]={
+  def extractNGram(positives:RDD[String], negatives:RDD[String], N:Int, m:Int, tf_idf:Boolean):scala.collection.Map[String, Int]={
     ///// no tf-idf
     val res = positives.union(negatives)
     .flatMap(line => {
@@ -57,11 +57,28 @@ object Yarowsky extends Tokenizer {
     .distinct
     .zipWithIndex
     .map(t=>(t._1,t._2.toInt))
+    .filter(t=> t._2 < m)
     .collectAsMap()
 
     /////test
-    println("################### N-Gram ##################")
-    res.take(5).foreach(println)
+    // println("################### N-Gram ##################")
+    // res.take(5).foreach(println)
+
+    return res
+  }
+
+  def toNGram(sents:RDD[String],f_map:scala.collection.Map[String, Int], N:Int): RDD[List[Int]]={
+    val res = sents.map(line=>{
+      val tokens = tokenize(line)
+      if (tokens.length >= N)
+        tokens.sliding(N)
+        .map(p => p.mkString(" "))
+        .filter(p=>f_map.contains(p))
+        .map(p=>f_map(p))
+        .toList 
+      else 
+        List[Int]()
+      })
 
     return res
   }
@@ -69,8 +86,17 @@ object Yarowsky extends Tokenizer {
 /**
   run Yarowsky's Algorithm with fixed hyper parameters
 */
-  def run(positives:RDD[String], negatives:RDD[String], unclassified:RDD[String], sc:SparkContext, model_path:String, result_path: String): Double={
-    val tr = extractNGram(positives,negatives,2,100,"None")
+  def run(positives:RDD[String], negatives:RDD[String], unclassified:RDD[String], sc:SparkContext, model_path:String, result_path: String,
+    N:Int, m:Int, tf_idf:Boolean): Double={
+    val f_map = extractNGram(positives,negatives,N,m,tf_idf)
+    val f_positives = toNGram(positives, f_map, N)
+    val f_negatives = toNGram(negatives, f_map, N)
+    val f_unclassified = toNGram(unclassified, f_map, N)
+
+    /////test
+    println("################### converted N-Gram ##################")
+    f_positives.take(5).foreach(println)
+    
     return 0.0
   }
   // def extractNGram(n:Int,)
@@ -101,12 +127,12 @@ object Yarowsky extends Tokenizer {
     .map(s=>s.slice(0,s.size-1))
 
     ///// test
-    println("################### positives ##################")
-    positives.foreach(println)
-    println("################### negatives ##################")
-    negatives.foreach(println)
-    println("################### unclassified ##################")
-    unclassified.take(5).foreach(println)
+    // println("################### positives ##################")
+    // positives.foreach(println)
+    // println("################### negatives ##################")
+    // negatives.foreach(println)
+    // println("################### unclassified ##################")
+    // unclassified.take(5).foreach(println)
 
     /*
     test run
@@ -114,7 +140,8 @@ object Yarowsky extends Tokenizer {
     val model_path = "model"
     val result_path = "result"
 
-    val acc = run(positives, negatives, unclassified, sc, model_path, result_path)
+    val acc = run(positives, negatives, unclassified, sc, model_path, result_path,
+      2, 10000, true)
 
     // val textFile2 = read(textFile, sc, args.input())
     // val tokens = textFile.map(line => tokenize(line))
