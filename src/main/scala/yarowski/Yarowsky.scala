@@ -47,11 +47,11 @@ object Yarowsky extends Tokenizer {
   /**
   extract N-Gram as a map from String to int, for example: "A B C" -> 1 (3-gram)
   */
-  def extractNGram(positives:RDD[String], negatives:RDD[String], N:Int, m:Int, tf_idf:Boolean):scala.collection.Map[String, Int]={
+  def extractNGram(sents:RDD[(String,Int)], N:Int, m:Int, tf_idf:Boolean):scala.collection.Map[String, Int]={
     ///// no tf-idf
-    val res = positives.union(negatives)
+    val res = sents.filter(s=>s._2!=0)
     .flatMap(line => {
-        val tokens = tokenize(line)
+        val tokens = tokenize(line._1)
         if (tokens.length >= N) tokens.sliding(N).map(p => p.mkString(" ")).toList else List()
       })
     .distinct
@@ -67,9 +67,13 @@ object Yarowsky extends Tokenizer {
     return res
   }
 
-  def toNGram(sents:RDD[String],f_map:scala.collection.Map[String, Int], N:Int): RDD[List[Int]]={
+  /**
+  convert sentences to list of n-gram features
+  */
+  def toNGram(sents:RDD[(String,Int)], f_map:scala.collection.Map[String, Int], N:Int): RDD[(List[Int],Int)]={
     val res = sents.map(line=>{
-      val tokens = tokenize(line)
+      val tokens = tokenize(line._1)
+      val lst = 
       if (tokens.length >= N)
         tokens.sliding(N)
         .map(p => p.mkString(" "))
@@ -78,25 +82,39 @@ object Yarowsky extends Tokenizer {
         .toList 
       else 
         List[Int]()
+      (lst,line._2)
       })
 
     return res
   }
 
+  // def train(f_positives:RDD[List(Int)], f_negatives:RDD[List(Int)], n_iter:Int):scala.collection.Map[Int, Double]={
+  //   var iter = 0
+  //   for(iter <- 0 to n_iter){
+
+  //   }
+  // }
+
 /**
   run Yarowsky's Algorithm with fixed hyper parameters
 */
-  def run(positives:RDD[String], negatives:RDD[String], unclassified:RDD[String], sc:SparkContext, model_path:String, result_path: String,
-    N:Int, m:Int, tf_idf:Boolean): Double={
-    val f_map = extractNGram(positives,negatives,N,m,tf_idf)
-    val f_positives = toNGram(positives, f_map, N)
-    val f_negatives = toNGram(negatives, f_map, N)
-    val f_unclassified = toNGram(unclassified, f_map, N)
+  def run(sents:RDD[(String,Int)], sc:SparkContext, model_path:String, result_path: String,
+    N:Int, m:Int, tf_idf:Boolean, n_iter:Int): Double={
+    // var n_unclassified = 0
+    // var n_unclassified_new = unclassified.count()
 
-    /////test
-    println("################### converted N-Gram ##################")
-    f_positives.take(5).foreach(println)
-    
+    // while(n_unclassified_new>0 && n_unclassified_new!=n_unclassified){
+      val f_map = extractNGram(sents,N,m,tf_idf)
+      val f_sents = toNGram(sents, f_map, N)
+
+      /////test
+      println("################### converted N-Gram ##################")
+      f_sents.take(5).foreach(println)
+
+    //   n_unclassified = n_unclassified_new
+
+    // }
+
     return 0.0
   }
   // def extractNGram(n:Int,)
@@ -117,22 +135,22 @@ object Yarowsky extends Tokenizer {
     /*
     split input into positives, negatives and unclassified
     */
-    val positives = textFile.filter(s=>s.slice(s.size-1,s.size)=="+")
-    .map(s=>s.slice(0,s.size-1))
+    val sents = textFile.map(s=>(s.slice(0,s.size-1), s.slice(s.size-1,s.size)))
+    .map(t=>(t._1,if(t._2=="+") 1 else (if(t._2=="-") -1 else 0)))
 
-    val negatives = textFile.filter(s=>s.slice(s.size-1,s.size)=="-")
-    .map(s=>s.slice(0,s.size-1))
 
-    val unclassified = textFile.filter(s=>s.slice(s.size-1,s.size)=="0")
-    .map(s=>s.slice(0,s.size-1))
+    // val positives = textFile.filter(s=>s.slice(s.size-1,s.size)=="+")
+    // .map(s=>s.slice(0,s.size-1))
+
+    // val negatives = textFile.filter(s=>s.slice(s.size-1,s.size)=="-")
+    // .map(s=>s.slice(0,s.size-1))
+
+    // val unclassified = textFile.filter(s=>s.slice(s.size-1,s.size)=="0")
+    // .map(s=>s.slice(0,s.size-1))
 
     ///// test
-    // println("################### positives ##################")
-    // positives.foreach(println)
-    // println("################### negatives ##################")
-    // negatives.foreach(println)
-    // println("################### unclassified ##################")
-    // unclassified.take(5).foreach(println)
+    // println("################### sents ##################")
+    // sents.foreach(println)
 
     /*
     test run
@@ -140,8 +158,8 @@ object Yarowsky extends Tokenizer {
     val model_path = "model"
     val result_path = "result"
 
-    val acc = run(positives, negatives, unclassified, sc, model_path, result_path,
-      2, 10000, true)
+    val acc = run(sents, sc, model_path, result_path,
+      2, 10000, true, 100)
 
     // val textFile2 = read(textFile, sc, args.input())
     // val tokens = textFile.map(line => tokenize(line))
