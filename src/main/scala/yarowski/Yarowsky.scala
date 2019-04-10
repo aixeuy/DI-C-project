@@ -52,17 +52,53 @@ object Yarowsky extends Tokenizer {
   for example: outputs {"A B C" -> 0 , "B C D" -> 1} (3-gram)
   */
   def extractNGram(sents:RDD[(String,Int)], N:Int, m:Int, tf_idf:Boolean):scala.collection.Map[String, Int]={
-    ///// no tf-idf
+    //select by InformationGain = Entropy(Parent) - SUM wight*Entropy(Split)
+    //Entropy = - p log_2 p - (1-p) log_2 (1-p)
+    val Positives = sents.filter(s=>s._2==1).count()
+    val Negatives = sents.filter(s=>s._2==0-1).count()
+
     val res = sents.filter(s=>s._2!=0)//get only the classified sentences
     .flatMap(line => {//flatmap to n-grams, same as in assignment
         val tokens = tokenize(line._1)
-        if (tokens.length >= N) tokens.sliding(N).map(p => p.mkString(" ")).toList else List()
+        val lb = line._2
+        if (tokens.length >= N) tokens.sliding(N).map(p => p.mkString(" ")).toList.distinct.map(p=>((p,lb),1)) else List()
       })
-    .distinct
+    .reduceByKey(_+_)
+    .map(t=>(t._1._1,if(t._1._2==1) (t._2,0) else (0,t._2)))
+    .reduceByKey((t1,t2)=>(t1._1+t2._1,t1._2+t2._2))
+    .map(t=>{
+      val p1 = t._2._1.toDouble
+      val n1 = t._2._2.toDouble
+      val p2 = Positives - p1
+      val n2 = Negatives - n1
+      val w1 = (p1+n1)/(Positives+Negatives)
+      val w2 = 1 - w1
+      val prob1 = p1/(p1+n1)
+      val prob2 = p2/(p2+n2)
+      val neg_entropy_1 = prob1*log10(prob1)/log10(2.0) + (1-prob1)*log10(1-prob1)/log10(2.0)
+      val neg_entropy_2 = prob1*log10(prob2)/log10(2.0) + (1-prob2)*log10(1-prob2)/log10(2.0)
+      val IG = w1 * neg_entropy_1 + w2 * neg_entropy_2
+      (t._1, IG)
+      })
+    .top(m)(Ordering.by[(String,Double), Double](_._2))
+    .map(t=>t._1)
     .zipWithIndex//for example: {"a","b","c"} -> {("a",0),("b",1),("c",2)}
     .map(t=>(t._1,t._2.toInt))//type convert, ignore
-    .filter(t=> t._2 < m)//only take m features (randomly), we can later pick top m with highest tf-idf
-    .collectAsMap()//convert to dict, key is first element, value is the 2nd
+    //.filter(t=> t._2 < m)//only take m features (randomly), we can later pick top m with highest tf-idf
+    .toMap//convert to dict, key is first element, value is the 2nd
+
+
+    ///// no tf-idf
+    // val res = sents.filter(s=>s._2!=0)//get only the classified sentences
+    // .flatMap(line => {//flatmap to n-grams, same as in assignment
+    //     val tokens = tokenize(line._1)
+    //     if (tokens.length >= N) tokens.sliding(N).map(p => p.mkString(" ")).toList else List()
+    //   })
+    // .distinct
+    // .zipWithIndex//for example: {"a","b","c"} -> {("a",0),("b",1),("c",2)}
+    // .map(t=>(t._1,t._2.toInt))//type convert, ignore
+    // .filter(t=> t._2 < m)//only take m features (randomly), we can later pick top m with highest tf-idf
+    // .collectAsMap()//convert to dict, key is first element, value is the 2nd
 
     /////test
     // println("################### N-Gram ##################")
@@ -185,7 +221,8 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
     var iter = 0
 
     var sents = sents0//{(sentence, label)} label is 1,0 or -1
-
+    // val f_map0 = extractNGram(sents,N,m,tf_idf)
+    // f_map0.foreach(println)
     while(n_unclassified_new>0 && n_unclassified_new != n_unclassified){//ends if all sentences are classified or no new sentences are classified in the last iteration
 
       println("# yarowsky iter " + iter)
@@ -285,7 +322,7 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
     val result_path = "result"
 
     val acc = run(sents, sc, model_path, result_path,
-      1, 100000, true, 100, 0.5)
+      1, 100, true, 100, 0.5)
 
     // val textFile2 = read(textFile, sc, args.input())
     // val tokens = textFile.map(line => tokenize(line))
