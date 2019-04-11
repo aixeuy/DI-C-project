@@ -51,7 +51,7 @@ object Yarowsky extends Tokenizer {
   extract N-Gram as a map from String to int, 
   for example: outputs {"A B C" -> 0 , "B C D" -> 1} (3-gram)
   */
-  def extractNGram(sents:RDD[(String,Int)], N:Int, m:Int, tf_idf:Boolean):scala.collection.Map[String, Int]={
+  def extractNGram(sents:RDD[(String,Int)], N:Int, m:Int):scala.collection.Map[String, Int]={
     //select by InformationGain = Entropy(Parent) - SUM wight*Entropy(Split)
     //Entropy = - p log_2 p - (1-p) log_2 (1-p)
     val Positives = sents.filter(s=>s._2==1).count()
@@ -77,7 +77,10 @@ object Yarowsky extends Tokenizer {
       val prob2 = p2/(p2+n2)
       val neg_entropy_1 = prob1*log10(prob1)/log10(2.0) + (1-prob1)*log10(1-prob1)/log10(2.0)
       val neg_entropy_2 = prob1*log10(prob2)/log10(2.0) + (1-prob2)*log10(1-prob2)/log10(2.0)
-      val IG = w1 * neg_entropy_1 + w2 * neg_entropy_2
+      var IG = w1 * neg_entropy_1 + w2 * neg_entropy_2
+      if(IG.isNaN || IG.isInfinite){
+        IG = Double.MinValue
+      }
       (t._1, IG)
       })
     .top(m)(Ordering.by[(String,Double), Double](_._2))
@@ -173,13 +176,15 @@ accuracy on a set of sentences
 train model
 output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted to a number (feature)
 */
-  def train(f_classified:RDD[(List[Int],Int)], n_iter:Int, alpha: Double, delta: Double): scala.collection.Map[Int, Double]={
+  def train(f_classified:RDD[(List[Int],Int)], n_iter:Int, alpha: Double, delta: Double, verbose:Boolean=false): scala.collection.Map[Int, Double]={
     var iter = 0//the current number of iteration
 
     var w = scala.collection.Map[Int, Double]()//init the dict to return
     breakable{//syntax, ignore
       for(iter <- 0 to n_iter){
-        println("## trainning iter "+iter)
+        if(verbose){
+          println("## trainning iter "+iter)
+        }
         /*
         this step calculates the gradiant for each feature
         example: f_classified = [
@@ -202,7 +207,9 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
         .reduceByKey(_+_)
         .take(1)
 
-        println("##  model weights changed by: " + s_d_w(0)._2)
+        if(verbose){
+          println("##  model weights changed by: " + s_d_w(0)._2)
+        }
         if(s_d_w(0)._2 < delta){//break if weights haven't changed much
           break
         }
@@ -214,26 +221,28 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
 /**
   run Yarowsky's Algorithm with fixed hyper parameters
 */
-  def run(sents0:RDD[(String,Int)], sc:SparkContext, model_path:String, result_path: String,
-    N:Int, m:Int, tf_idf:Boolean, n_iter:Int, threshold:Double): Double={
+  def run(sents0:RDD[(String,Int)], sents_test:RDD[(String,Int)], sc:SparkContext, model_path:String, result_path: String, save:Boolean,
+    N:Int, m:Int, n_iter:Int, threshold:Double, alpha:Double, delta:Double): Double={
     var n_unclassified = 0L
     var n_unclassified_new = sents0.filter(t => t._2 == 0).count()
     var iter = 0
 
     var sents = sents0//{(sentence, label)} label is 1,0 or -1
-    // val f_map0 = extractNGram(sents,N,m,tf_idf)
-    // f_map0.foreach(println)
+    var f_map = scala.collection.Map[String, Int]()
+    var w = scala.collection.Map[Int, Double]()
+
     while(n_unclassified_new>0 && n_unclassified_new != n_unclassified){//ends if all sentences are classified or no new sentences are classified in the last iteration
 
       println("# yarowsky iter " + iter)
       println("# extracting features")
-      val f_map = extractNGram(sents,N,m,tf_idf)//{N-Gram -> number}
+      f_map = extractNGram(sents,N,m)//{N-Gram -> number}
+      println("# converting to feature representation")
       val f_classified = toNGram(sents.filter(t=>t._2!=0), f_map, N)//filter the unclassified sents (ends with 0) and convert to list of features
       //for example: {([0,1],1),
       //              ([1,2],-1)}
 
       println("# trainning model")
-      val w = train(f_classified, n_iter, 0.002, 0.05)// train model: {feature -> weight}
+      w = train(f_classified, n_iter, alpha, delta)// train model: {feature -> weight}
       val train_acc =  accuracy(f_classified, w)
       println("# trainning accuracy is: " + train_acc)
 
@@ -273,9 +282,69 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
       sents = sents_new
     }
 
-    return 0.0
+    val f_test = toNGram(sents_test, f_map, N)
+    val test_acc =  accuracy(f_test, w)
+    println("test accuracy is: "+test_acc)
+    return test_acc
   }
-  // def extractNGram(n:Int,)
+
+  /**
+  search best hyper parameters
+  */
+  def parameter_search(
+    sents_train:RDD[(String,Int)], sents_test:RDD[(String,Int)], sc:SparkContext, model_path:String, result_path: String,
+    N_start:Int, N_end:Int, N_step:Int, 
+    m_start:Int, m_end:Int, m_step:Int,
+    num_iter_start:Int, num_iter_end:Int, num_iter_step:Int, 
+    threshold_start:Double, threshold_end:Double, threshold_step:Double, 
+    alpha_start:Double, alpha_end:Double, alpha_step:Double,  
+    delta_start:Double, delta_end:Double, delta_step:Double
+    ): (Int,Int,Int,Double,Double,Double)={
+    var N_best = N_start
+    var m_best = m_start
+    var num_iter_best = num_iter_start
+    var threshold_best = threshold_start
+    var alpha_best = alpha_start
+    var delta_best = delta_start
+    var acc_best = 0.0
+    // println("###############################")
+    for (N <- N_start to N_end by N_step;
+      m <- m_start to m_end by m_step;
+      num_iter <- num_iter_start to num_iter_end by num_iter_step;
+      threshold <- threshold_start to threshold_end by threshold_step;
+      alpha <- alpha_start to alpha_end by alpha_step;
+      delta <- delta_start to delta_end by delta_step){
+      // println("------------------------------")
+      println("testing:")
+      println("N: "+N)
+      println("m: "+m)
+      println("num_iter: "+num_iter)
+      println("threshold: "+threshold)
+      println("alpha: "+alpha)
+      println("delta: "+delta)
+      val acc = run(sents_train, sents_test, sc, model_path, result_path, false,
+      N, m, num_iter, threshold, alpha, delta)
+      println("the testing accuracy for:")
+      println("N: "+N)
+      println("m: "+m)
+      println("num_iter: "+num_iter)
+      println("threshold: "+threshold)
+      println("alpha: "+alpha)
+      println("delta: "+delta)
+      println("is: " +acc)
+      if(acc > acc_best){
+        N_best = N
+        m_best = m
+        num_iter_best = num_iter
+        threshold_best = threshold
+        alpha_best = alpha
+        delta_best = delta
+        acc_best = acc
+      }
+      println("the best accuracy is: "+acc_best)
+    }
+    return (N_best,m_best,num_iter_best,threshold_best,alpha_best,delta_best)
+  }
 
   def main(argv: Array[String]): Unit = {
     val args = new YarowskyConf(argv)
@@ -301,19 +370,11 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
     val sents = textFile.map(s=>(s.slice(0,s.size-1), s.slice(s.size-1,s.size)))
     .map(t=>(t._1,if(t._2=="+") 1 else (if(t._2=="-") -1 else 0)))
 
+    //train-test split
+    val sents_indexed = sents.zipWithIndex
 
-    // val positives = textFile.filter(s=>s.slice(s.size-1,s.size)=="+")
-    // .map(s=>s.slice(0,s.size-1))
-
-    // val negatives = textFile.filter(s=>s.slice(s.size-1,s.size)=="-")
-    // .map(s=>s.slice(0,s.size-1))
-
-    // val unclassified = textFile.filter(s=>s.slice(s.size-1,s.size)=="0")
-    // .map(s=>s.slice(0,s.size-1))
-
-    ///// test
-    // println("################### sents ##################")
-    // sents.foreach(println)
+    val sents_train = sents_indexed.filter(s=>s._1._2==0 || s._2%5!=0).map(s=>s._1)
+    val sents_test = sents_indexed.filter(s=>s._1._2!=0 && s._2%5==0).map(s=>s._1)
 
     /*
     test run
@@ -321,8 +382,39 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
     val model_path = "model"
     val result_path = "result"
 
-    val acc = run(sents, sc, model_path, result_path,
-      1, 100, true, 100, 0.5)
+    val N_start = 1
+    val N_end = 1 
+    val N_step = 1 
+    val m_start = 100
+    val m_end = 1000
+    val m_step = 300
+    val num_iter_start = 100
+    val num_iter_end = 100 
+    val num_iter_step = 100 
+    val threshold_start = 0.5
+    val threshold_end = 0.8
+    val threshold_step = 0.1 
+    val alpha_start = 0.002
+    val alpha_end = 0.002
+    val alpha_step = 0.002  
+    val delta_start = 0.05
+    val delta_end = 0.05 
+    val delta_step = 0.05
+
+    val best_paras = parameter_search(
+    sents_train, sents_test, sc, model_path, result_path,
+    N_start, N_end, N_step, 
+    m_start, m_end, m_step,
+    num_iter_start, num_iter_end, num_iter_step, 
+    threshold_start, threshold_end, threshold_step, 
+    alpha_start, alpha_end, alpha_step,  
+    delta_start, delta_end, delta_step
+    )
+    println("the best (N, m, num_iter, threshold, alpha, delta) is: "+best_paras)
+    //(1,400,100,0.5,0.002,0.05) 0.8
+
+    // val acc = run(sents_train, sents_test, sc, model_path, result_path, false,
+    //   1, 100, 100, 0.5, 0.002, 0.05)
 
     // val textFile2 = read(textFile, sc, args.input())
     // val tokens = textFile.map(line => tokenize(line))
