@@ -45,19 +45,19 @@
    --m_start 100 --m_end 1000 --m_step 300 \
    --threshold_start 0.5 --threshold_end 0.5 --threshold_step 0.1
   
-  train a model with m = 400 and default values for other hyper parameters;
+  train a model with m = 700, threshold = 0.6 and default values for other hyper parameters;
   write classification of input to "output/" and model to "model/":
   spark-submit --class ca.uwaterloo.cs451.yarowski.Yarowsky \
    target/assignments-1.0.jar --input data/bank_final.txt \
    --output output --model model \
    --mod train \
-   --m_start 400
+   --m_start 700 --threshold_start 0.7999999999999999
   
-  find classification for the sentence "I go to the bank and withdraw some cash"
+  find classification for the sentence "I go to the bank and withdraw some money"
   spark-submit --class ca.uwaterloo.cs451.yarowski.Yarowsky \
    target/assignments-1.0.jar --input data/bank_final.txt \
    --model model \
-   --mod test --test_sent "I go to the bank and withdraw some cash"
+   --mod test --test_sent "I go to the bank and withdraw some money"
   * 
   */
 
@@ -121,7 +121,7 @@ class YarowskyConf(args: Seq[String]) extends ScallopConf(args) {
   val delta_step = opt[Double](descr = "delta_step", required = false, default = Some(0.05))
   
   val mod = opt[String](descr = "mod", required = false, default = Some("help"))
-  val test_sent = opt[String](descr = "test sentence", required = false, default = Some("I go to the bank and withdraw some cash"))
+  val test_sent = opt[String](descr = "test sentence", required = false, default = Some("I go to the bank and withdraw some money"))
   // val N_start = 1
   // val N_end = 1 
   // val N_step = 1 
@@ -387,7 +387,49 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
     val f_test = toNGram(sents_test, f_map, N)
     val test_acc =  accuracy(f_test, w)
     println("test accuracy is: "+test_acc)
+
+    // write results and model
+    if(save){
+      sents.map(s=>{
+        var lb = "0"
+        if(s._2==1){
+          lb = "+"
+        }
+        else if(s._2==0-1){
+          lb = "-"
+        }
+        (s._1+lb)
+        }).saveAsTextFile(result_path)
+
+      val model = f_map.map(t=>(t._1,w.getOrElse(t._2,0.0)))
+      sc.parallelize(model.toSeq,1).sortBy(0-_._2).saveAsTextFile(model_path)
+    }
     return test_acc
+  }
+
+  def test(model_path:String, sent:String, sc:SparkContext){
+    val str_w = sc.textFile(model_path+"/part-00000")
+    .map(s =>{
+      val words = s.slice(1,s.size-1).split(",")
+      (words(0), words(1).toDouble)
+    })
+    val f_w = str_w.zipWithIndex
+
+    val w = f_w.map(t=>(t._2.toInt,t._1._2)).collectAsMap()
+    val f_map = f_w.map(t=>(t._1._1,t._2.toInt)).collectAsMap()
+
+    val N = str_w.take(1)(0)._1.split(" ").size
+
+    println("using "+N+"-Gram")
+    val score = classify(toNGramSingle(sent,f_map,N),w)
+    println("score is: "+score)
+    if(score>0){
+      println("classified as +")
+    }
+    else{
+      println("classified as -")
+    }
+
   }
 
   /**
@@ -460,21 +502,6 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
     val sc = new SparkContext(conf)
 
     //ignore all above this line
-    val textFile = sc.textFile(args.input())
-
-    /*
-    parse text
-    for example {"A B+"} ->{("A B",1)}
-    */
-    val sents = textFile.map(s=>(s.slice(0,s.size-1), s.slice(s.size-1,s.size)))
-    .map(t=>(t._1,if(t._2=="+") 1 else (if(t._2=="-") -1 else 0)))
-
-    //train-test split
-    val sents_indexed = sents.zipWithIndex
-
-    val sents_train = sents_indexed.filter(s=>s._1._2==0 || s._2%5!=0).map(s=>s._1)
-    val sents_test = sents_indexed.filter(s=>s._1._2!=0 && s._2%5==0).map(s=>s._1)
-
     /*
     test run
     */
@@ -506,6 +533,21 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
     val delta_step = args.delta_step()
 
     if(mod == "train"){
+      val textFile = sc.textFile(args.input())
+      /*
+      parse text
+      for example {"A B+"} ->{("A B",1)}
+      */
+      val sents = textFile.map(s=>(s.slice(0,s.size-1), s.slice(s.size-1,s.size)))
+      .map(t=>(t._1,if(t._2=="+") 1 else (if(t._2=="-") -1 else 0)))
+
+      //train-test split
+      val sents_indexed = sents.zipWithIndex
+
+      val sents_train = sents_indexed.filter(s=>s._1._2==0 || s._2%5!=0).map(s=>s._1)
+      val sents_test = sents_indexed.filter(s=>s._1._2!=0 && s._2%5==0).map(s=>s._1)
+
+
       val outputDir = new Path(result_path)
       FileSystem.get(sc.hadoopConfiguration).delete(outputDir, true)
       val modelDir = new Path(model_path)
@@ -516,6 +558,20 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
       verbose = true)
     }
     else if(mod == "search"){
+      val textFile = sc.textFile(args.input())
+      /*
+      parse text
+      for example {"A B+"} ->{("A B",1)}
+      */
+      val sents = textFile.map(s=>(s.slice(0,s.size-1), s.slice(s.size-1,s.size)))
+      .map(t=>(t._1,if(t._2=="+") 1 else (if(t._2=="-") -1 else 0)))
+
+      //train-test split
+      val sents_indexed = sents.zipWithIndex
+
+      val sents_train = sents_indexed.filter(s=>s._1._2==0 || s._2%5!=0).map(s=>s._1)
+      val sents_test = sents_indexed.filter(s=>s._1._2!=0 && s._2%5==0).map(s=>s._1)
+
       val best_paras = parameter_search(
       sents_train, sents_test, sc, model_path, result_path,
       N_start, N_end, N_step, 
@@ -528,7 +584,7 @@ output a dict: {feature(int) -> weight(double)}, recall each n-gram is converted
       println("the best hyper parameters (N, m, num_iter, threshold, alpha, delta) is: "+best_paras)
     }
     else if(mod == "test"){
-
+      test(model_path, test_sent, sc)
     }
     else{
       println("--mod train, search or test")
