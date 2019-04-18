@@ -62,3 +62,7 @@ spark-submit --class ca.uwaterloo.cs451.yarowski.Yarowsky \
  target/assignments-1.0.jar --input data/bank_final.txt \  
  --model model \    
  --mod test --test_sent "I go to the bank and withdraw some money"    
+
+## run python program
+
+execute code in python_version_project/yarowsky.ipynb  
